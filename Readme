@@ -1,0 +1,181 @@
+Kubernetes Cluster Setup using Ansible Playbook on machines with CentOS7 
+=======================================================================
+Prerequisites:
+Master Node:
+CPU : minimum > 2
+RAM: minimum > 1700mb
+Master node requires 2 cpu for installing kubeadm and setup cluster on it to act as a controller node to function properly.
+
+Worker Node:
+CPU: minimum> 1
+RAM: minimum > 1700mb
+======================================================================
+
+Create two centos machines. Assign static IP addresses on them.
+For eg:
+1. KubeMaster  > 192.168.0.102
+2. KubeWorker  > 192.168.0.103
+
+======================================================================
+
+1. Set hostname for master and worker with the below commands:
+
+hostnamectl set-hostname kubemaster > on master machine
+hostnamectl set-hostname kubeworker > on worker machine
+
+2. Make an entry in the /etc/hosts file on the machines
+   vi /etc/hosts
+   192.168.0.102  kubemaster
+   192.168.0.103  kubeworker
+
+======================================================================
+Requirement for Ansible Working:
+
+Create Passwordless authentication between both the two machines
+======================================================================
+
+Run cmd to generate a unique hashed key on both the machines
+#ssh-key-gen
+press "enter key" after each output 
+
+Exchange unique key on both the machines -->
+#ssh-copy-id root@kubemaster
+#ssh-copy-id root@kubeworker
+=======================================================================
+Install Ansible on one machine:
+#yum install ansible
+#systemctl enable ansible 
+#systemctl start ansible
+=======================================================================
+Register both the machines to ansible inventory
+edit /etc/ansible/hosts
+make an entry under group section
+[master]
+kubemaster
+[worker]
+kubeworker
+========================================================================
+Ping both machine using ansible
+#ansble -m ping all
+
+==============================^===================================^=====
+On Kubemaster and Kubeworker
+==============================^===================================^=====
+
+Disable Selinux
+setenforce 0
+sed -i --follow-symlinks 's/SELINUX=enforcing/SELINUX=disabled/g' /etc/sysconfig/selinux
+========================================================
+
+Disable firewall
+systemctl disable firewalld
+========================================================
+
+Configure below settings
+
+echo '1' > /proc/sys/net/bridge/bridge-nf-call-iptables
+=======================================================
+
+Disable SWAP
+Open and edit the fstab file:
+vi /etc/fstab
+Comment the line consisting swap in it.
+#/dev/mapper/
+
+===============^====================^=================
+On Kubemaster
+===============^====================^=================
+
+Create Kubernetes Repo file
+cat <<EOF > /etc/yum.repos.d/kubernetes.repo
+[kubernetes]
+name=Kubernetes
+baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+EOF
+========================================================
+
+Install Kubeadm and Docker
+yum install kubeadm docker -y 
+========================================================
+
+Enable and Start the Service
+systemctl enable kubelet
+systemctl start kubelet
+systemctl enable docker
+systemctl start docker
+=======================================================
+
+Add the arguements in the below file:
+vi /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
+Environment="KUBELET_CGROUP_ARGS=--cgroup-driver=systemd"
+ExecStart=/usr/bin/kubelet $KUBELET_KUBECONFIG_ARGS $KUBELET_CONFIG_ARGS $KUBELET_KUBEADM_ARGS $KUBELET_EXTRA_ARGS $KUBELET_CGROUP_ARGS
+=======================================================
+
+Initialize the Kubernetes Cluster
+kubeadm init
+=======================================================
+
+After Kubeadm is initialized you should see this information.
+Your Kubernetes control-plane has initialized successfully!
+To start using your cluster, you need to run the following:
+  mkdir -p $HOME/.kube
+  sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+  sudo chown $(id -u):$(id -g) $HOME/.kube/config
+
+Alternatively, if you are the root user, you can run:
+export KUBECONFIG=/etc/kubernetes/admin.conf
+You should now deploy a pod network to the cluster.
+Run "kubectl apply -f [podnetwork].yaml" with one of the options listed at:
+https://kubernetes.io/docs/concepts/cluster-administration/addons/
+Then you can join any number of worker nodes by running the following on each as root:
+kubeadm join 192.168.15.34:6443 --token ep2tut.omiv4tsuqphknxmc --discovery-token-ca-cert-hash sha256:dc99eda11bc5a8fa2c749d3969387b07ef96c8ed77293f44a4ff8f158b44ad45
+
+>> Note down this token for joining the worker node with master  
+==========================================================
+
+Running the cluster
+To start using your cluster, you need to run the following as a regular user:
+mkdir -p $HOME/.kube
+cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+chown $(id -u):$(id -g) $HOME/.kube/config
+
+==========================================================
+
+Check the cluster with the below command in the Master node.
+kubectl get nodes
+The pods will not be in ready state, so need to install the pod network.
+==========================================================
+
+kubectl apply -f https://github.com/coreos/flannel/raw/master/Documentation/kube-flannel.yml
+==========================================================
+
+Check again with the following commands:
+kubectl get nodes
+Now the pods will be in ready state after installing the pod network.
+==========================================================
+
+Join the worker nodes with the master node:
+kubeadm join 192.168.15.34:6443 --token ep2tut.omiv4tsuqphknxmc --discovery-token-ca-cert-hash sha256:dc99eda11bc5a8fa2c749d3969387b07ef96c8ed77293f44a4ff8f158b44ad45
+use below command to check nodes status with 
+kubectl get nodes
+=====================================
+
+Additional setings:
+>> If want to execute kubectl commands from worker node. Do the following:
+
+Create the following directory in Worker nodes.
+mkdir -p $HOME/.kube
+Copy the config file from the Master node from the below location to the target location created in step 1.
+mkdir -p $HOME/.kube/config
+Execute the below command in Worker nodes
+chown $(id -u):$(id -g) $HOME/.kube/config
+Now you can use kubectl commands in worker node
+=====================================
+
+Run the plabook using below command:
+ansible-playbook cluster.yml
+
