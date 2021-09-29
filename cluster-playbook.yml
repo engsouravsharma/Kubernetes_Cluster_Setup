@@ -1,0 +1,199 @@
+---
+- hosts: all
+  become: true
+  tasks:
+  
+  - name: Disabling Swap on all nodes
+    shell: swapoff -a
+
+  - name : Commenting Swap Entries in /etc/fstab
+    replace:
+     path: /etc/fstab
+     regexp: '(.*swap*)'
+     replace: '#\1'
+  
+  - name: disable SElinux on reboot
+    selinux:
+      state: disabled
+    
+  - name: Disable firewalld
+    shell: systemctl stop firewalld && systemctl disable firewalld
+  
+  - name: ensure net.bridge.bridge-nf-call-iptables is set to 1
+    sysctl:
+     name: net.bridge.bridge-nf-call-iptables
+     value: 1
+     state: present
+    
+  - name: Create Kubernetes repo
+    file:
+     path: /etc/yum.repos.d/kubernetes.repo
+     state: touch
+  
+  - name: add urls to kubernetes repo file
+    blockinfile:
+     path: /etc/yum.repos.d/kubernetes.repo
+     block: |
+         [kubernetes]
+         name=Kubernetes
+         baseurl=https://packages.cloud.google.com/yum/repos/kubernetes-el7-x86_64
+         enabled=1
+         gpgcheck=1
+         repo_gpgcheck=1
+         gpgkey=https://packages.cloud.google.com/yum/doc/yum-key.gpg
+             https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg
+
+  - name: Install Kubeadm and docker Packages
+    yum:
+      name: "{{ packages }}"
+      state: present
+      update_cache: yes
+    vars:
+      packages:
+        - kubeadm
+        - docker
+  
+  - name: Docker service start
+    service:
+      name: docker
+      enabled: yes
+      state: started
+
+  - name: Enabling Kubelet Service 
+    service:
+      name: kubelet
+      enabled: yes
+  
+  - name: Inserting a line after a pattern in Ansible example 
+      lineinfile:
+        path: /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
+        line: Environment="KUBELET_CGROUP_ARGS=--cgroup-driver=systemd"
+        insertbefore: EnvironmentFile=-/etc/sysconfig/kubelet
+      lineinfile:
+        dest: /usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf
+        state: present
+        regexp: '^(ExecStart=/usr/bin/kubelet(.*)$)'
+        backrefs: yes
+        line: '\1, $KUBELET_CGROUP_ARGS'
+
+  - name: Daemon Reload
+    service:
+      name: daemon-reload
+      state: restarted
+      name: docker
+      state: restarted
+      name: kubelet
+      state: restarted
+
+  - name: Initialize the Kubernetes CLuster
+    when: inventory_hostname in groups['master']
+    shell: kubeadm init 
+
+  - name: Setting up Kubernetes CLuster
+    shell: "{{ item }}"
+    when: inventory_hostname in groups['master']
+    with_items:
+    - mkdir -p $HOME/.kube
+    - cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+    - chown $(id -u):$(id -g) $HOME/.kube/config
+
+  - name: Install Flannel pod network
+    when: inventory_hostname in groups['master']
+    shell: kubectl apply -f https://github.com/coreos/flannel/raw/master/Documentation/kube-flannel.yml
+
+  - name: Retreive Kubernetes join command which will require to join worker node
+    when: inventory_hostname in groups['master']
+    shell: kubeadm token create --print-join-command
+    register: join_command
+
+  - name: Attach kubeadm join command to a file on master node
+    when: inventory_hostname in groups['master']
+    local_action: "copy content='{{ join_command.stdout_lines[0] }}' dest=join-command"
+
+  - name: copy the join-command file to worker node
+    when: inventory_hostname in groups['worker']
+    copy: src=join-command dest=/tmp/kubeadm-join.sh mode=0777
+
+  - name: Join the worker node to cluster
+    when: inventory_hostname in groups['worker']
+    shell: sh /tmp/kubeadm-join.sh
+
+  - name: Create a persistent Volume
+     k8s:
+     state: present
+     apiVersion: v1
+     kind: PersistentVolume
+     metadata:
+       name: my-pv
+       labels:
+           type: local
+       spec:
+         storageClassName: manual
+           capacity:
+               storage: 5Gi
+           accessModes:
+               - ReadWriteOnce
+         hostPath:
+             path: "/data/kubernetes/persistent-volume/my-pv"
+  
+  - name: Create Persistent Volume claim for storage in a pod
+      k8s:
+      state: present
+      apiVersion: v1 
+      kind: PersistentVolumeClaim
+      metadata:
+        name: my-test-pvc
+      spec:
+        storageClassName: manual
+          accessModes:
+             - ReadWriteOnce
+          resources:
+             requests:
+                storage: 2Gi
+
+  - name: Service for the app
+      k8s:
+      state: present
+      definition:
+        apiVersion: v1
+        kind: Service
+        metadata:
+          name: my-service
+        spec:
+          type: NodePort
+            selector:
+                app: hello-world-rest
+            ports:
+            - port: 80
+              targetPort: 5050
+              nodePort: 31000
+
+  - name: Deployment for  hello-world-rest application
+      k8s:
+      state: present
+      definition:
+        api_version: v1
+        kind: Deployment
+          metadata:
+            name: hello-world            
+            labels:
+              app: hello-world-rest  
+          spec:
+            replicas: 3
+            selector:
+              matchLabels:
+                app: hello-world-rest
+            template:
+              metadata:
+                labels:
+                  app: hello-world-rest
+              spec:
+                containers:
+                  - name: hello-world
+                    image: vad1mo/hello-world-rest
+                    ports:
+                      - containerPort: 5050
+                        protocol: TCP          
+
+
+
