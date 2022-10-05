@@ -2,13 +2,13 @@ Kubernetes Cluster Setup using Ansible Playbook on machines with CentOS7
 =======================================================================
 Prerequisites:
 Master Node:
-CPU : minimum > 2
-RAM: minimum > 1700mb
+CPU : minimum > 2 core
+RAM: minimum > 1700MB
 Master node requires 2 cpu for installing kubeadm and setup cluster on it to act as a controller node to function properly.
 
 Worker Node:
-CPU: minimum> 1
-RAM: minimum > 1700mb
+CPU: minimum> 1 core
+RAM: minimum > 1700MB
 ======================================================================
 
 Create two centos machines. Assign static IP addresses on them.
@@ -165,7 +165,7 @@ kubectl get nodes
 =====================================
 
 Additional setings:
->> If want to execute kubectl commands from worker node. Do the following:
+>> If you want to execute kubectl commands from worker node. Do the following:
 
 Create the following directory in Worker nodes.
 mkdir -p $HOME/.kube
